@@ -1,13 +1,15 @@
 <?php
 
 /**
- * This class provides the common functionality for issuing Annual Tax Receipts for
- * one or a group of contact ids.
+ * This class provides the common functionality for issuing Aggregate Tax Receipts for
+ * a group of Contribution ids.
  */
-class CRM_Cdntaxreceipts_Task_IssueAnnualTaxReceipts extends CRM_Contact_Form_Task {
+class CRM_Cdntaxreceipts_Task_IssueAggregateTaxReceipts extends CRM_Contribute_Form_Task {
 
   const MAX_RECEIPT_COUNT = 1000;
 
+  private $_contributions_status;
+  private $_issue_type;
   private $_receipts;
   private $_years;
 
@@ -26,26 +28,86 @@ class CRM_Cdntaxreceipts_Task_IssueAnnualTaxReceipts extends CRM_Contact_Form_Ta
 
     parent::preProcess();
 
-    $thisYear = date("Y");
-    $this->_years = array($thisYear, $thisYear - 1, $thisYear - 2);
+    $this->_contributions_status = array();
+    $this->_issue_type = array('original' , 'duplicate');
+    $this->_receipts = array();
+    $this->_years = array();
 
-    $receipts = array();
-    foreach ( $this->_years as $year ) {
-      $receipts[$year] = array('email' => 0, 'print' => 0, 'total' => 0, 'contrib' => 0);
+    $receipts = array('totals' =>
+      array(
+        'total_contrib' => 0,
+        'loading_errors' => 0,
+        'total_contacts' => 0,
+        'original' => 0,
+        'duplicate' => 0,
+      ),
+    );
+
+    $this->_contributions_status = cdntaxreceipts_contributions_get_status($this->_contributionIds);
+
+    // Get the number of years selected
+    foreach ($this->_contributions_status as $contrib_status) {
+      $this->_years[$contrib_status['receive_year']] = $contrib_status['receive_year'];
     }
 
-    // count and categorize contributions
-    foreach ( $this->_contactIds as $id ) {
-      foreach ( $this->_years as $year ) {
-        list( $issuedOn, $receiptId ) = cdntaxreceipts_annual_issued_on($id, $year);
+    foreach ( $this->_years as $year ) {
+      foreach ($this->_issue_type as $issue_type) {
+        $receipts[$issue_type][$year] = array(
+          'total_contrib' => 0,
+          'total_amount' => 0,
+          'email' => array('contribution_count' => 0, 'receipt_count' => 0,),
+          'print' => array('contribution_count' => 0, 'receipt_count' => 0,),
+          'total_contacts' => 0,
+          'total_eligible_amount' => 0,
+          'not_eligible' => 0,
+          'not_eligible_amount' => 0,
+          'contact_ids' => array(),
+        );
+      }
+    }
 
-        $eligible = count(cdntaxreceipts_contributions_not_receipted($id, $year));
-        if ( $eligible > 0 ) {
-          list( $method, $email ) = cdntaxreceipts_sendMethodForContact($id);
-          $receipts[$year][$method]++;
-          $receipts[$year]['total']++;
-          $receipts[$year]['contrib'] += $eligible;
+    // Count and categorize contributions
+    foreach ($this->_contributionIds as $id) {
+      $status = isset($this->_contributions_status[$id]) ? $this->_contributions_status[$id] : NULL;
+      if (is_array($status)) {
+        $year = $status['receive_year'];
+        $issue_type = empty($status['receipt_id']) ? 'original' : 'duplicate';
+        $receipts[$issue_type][$year]['total_contrib']++;
+        // Note: non-deductible amount has already had hook called in cdntaxreceipts_contributions_get_status
+        $receipts[$issue_type][$year]['total_amount'] += ($status['total_amount']);
+        $receipts[$issue_type][$year]['not_eligible_amount'] += $status['non_deductible_amount'];
+        if ($status['eligible']) {
+          list( $method, $email ) = cdntaxreceipts_sendMethodForContact($status['contact_id']);
+          $receipts[$issue_type][$year][$method]['contribution_count']++;
+          if (!isset($receipts[$issue_type][$year]['contact_ids'][$status['contact_id']])) {
+            $receipts[$issue_type][$year]['contact_ids'][$status['contact_id']] = array(
+              'issue_method' => $method,
+              'contributions' => array(),
+            );
+            $receipts[$issue_type][$year][$method]['receipt_count']++;
+          }
+          // Here we store all the contribution details for each contact_id
+          $receipts[$issue_type][$year]['contact_ids'][$status['contact_id']]['contributions'][$id] = $status;
         }
+        else {
+          $receipts[$issue_type][$year]['not_eligible']++;
+          // $receipts[$issue_type][$year]['not_eligible_amount'] += $status['total_amount'];
+        }
+        // Global totals
+        $receipts['totals']['total_contrib']++;
+        $receipts['totals'][$issue_type]++;
+        if ($status['contact_id']) {
+          $receipts['totals']['total_contacts']++;
+        }
+      }
+      else {
+        $receipts['loading_errors']++;
+      }
+    }
+
+    foreach ($this->_issue_type as $issue_type) {
+      foreach ($this->_years as $year) {
+        $receipts[$issue_type][$year]['total_contacts'] = count($receipts[$issue_type][$year]['contact_ids']);
       }
     }
 
@@ -62,22 +124,15 @@ class CRM_Cdntaxreceipts_Task_IssueAnnualTaxReceipts extends CRM_Contact_Form_Ta
    */
   function buildQuickForm() {
 
-    CRM_Utils_System::setTitle(ts('Issue Annual Tax Receipts', array('domain' => 'org.civicrm.cdntaxreceipts')));
+    CRM_Utils_System::setTitle(ts('Issue Aggregate Tax Receipts', array('domain' => 'org.civicrm.cdntaxreceipts')));
 
     CRM_Core_Resources::singleton()->addStyleFile('org.civicrm.cdntaxreceipts', 'css/civicrm_cdntaxreceipts.css');
 
-    // assign the counts
-    $receipts = $this->_receipts;
-    $receiptTotal = 0;
-    foreach ( $this->_years as $year ) {
-      $receiptTotal += $receipts[$year]['total'];
-    }
-
-    $this->assign('receiptCount', $receipts);
-    $this->assign('receiptTotal', $receiptTotal);
+    $this->assign('receiptList', $this->_receipts);
     $this->assign('receiptYears', $this->_years);
 
     // add radio buttons
+    // TODO: It might make sense to issue for multiple years here so switch to checkboxes
     foreach ( $this->_years as $year ) {
       $this->addElement('radio', 'receipt_year', NULL, $year, 'issue_' . $year);
     }
@@ -102,6 +157,7 @@ class CRM_Cdntaxreceipts_Task_IssueAnnualTaxReceipts extends CRM_Contact_Form_Ta
   }
 
   function setDefaultValues() {
+    // TODO: Handle case where year -1 was not an option
     return array('receipt_year' => 'issue_' . (date("Y") - 1),);
   }
 
@@ -144,33 +200,28 @@ class CRM_Cdntaxreceipts_Task_IssueAnnualTaxReceipts extends CRM_Contact_Form_Ta
       $previewMode = TRUE;
     }
 
-    /**
-     * Drupal module include
-     */
-    //module_load_include('.inc','civicrm_cdntaxreceipts','civicrm_cdntaxreceipts');f
-    //module_load_include('.module','civicrm_cdntaxreceipts','civicrm_cdntaxreceipts');
-
     // start a PDF to collect receipts that cannot be emailed
-    $receiptsForPrinting = cdntaxreceipts_openCollectedPDF();
+    $receiptsForPrintingPDF = cdntaxreceipts_openCollectedPDF();
 
     $emailCount = 0;
     $printCount = 0;
     $failCount = 0;
 
-    foreach ($this->_contactIds as $contactId ) {
-
-      list( $issuedOn, $receiptId ) = cdntaxreceipts_annual_issued_on($contactId, $year);
-      $contributions = cdntaxreceipts_contributions_not_receipted($contactId, $year);
-
+    // TODO: Will need to change if multiple years allowed
+    foreach ($this->_receipts['original'][$year]['contact_ids'] as $contact_id => $contribution_status) {
       if ( $emailCount + $printCount + $failCount >= self::MAX_RECEIPT_COUNT ) {
-        $status = ts('Maximum of %1 tax receipt(s) were sent. Please repeat to continue processing.', array(1=>self::MAX_RECEIPT_COUNT, 'domain' => 'org.civicrm.cdntaxreceipts'));
+        $status = ts('Maximum of %1 tax receipt(s) were sent. Please repeat to continue processing.',
+          array(1=>self::MAX_RECEIPT_COUNT, 'domain' => 'org.civicrm.cdntaxreceipts'));
         CRM_Core_Session::setStatus($status, '', 'info');
         break;
       }
 
-      if ( empty($issuedOn) && count($contributions) > 0 ) {
+      $contributions = $contribution_status['contributions'];
+      $method = $contribution_status['issue_method'];
 
-        list( $ret, $method ) = cdntaxreceipts_issueAnnualTaxReceipt($contactId, $year, $receiptsForPrinting, $previewMode);
+      if ( empty($issuedOn) && count($contributions) > 0 ) {
+        $ret = cdntaxreceipts_issueAggregateTaxReceipt($contact_id, $year, $contributions, $method,
+          $receiptsForPrintingPDF, $previewMode);
 
         if ( $ret == 0 ) {
           $failCount++;
@@ -213,7 +264,7 @@ class CRM_Cdntaxreceipts_Task_IssueAnnualTaxReceipts extends CRM_Contact_Form_Ta
 
     // 4. send the collected PDF for download
     // NB: This exits if a file is sent.
-    cdntaxreceipts_sendCollectedPDF($receiptsForPrinting, 'Receipts-To-Print-' . (int) $_SERVER['REQUEST_TIME'] . '.pdf');  // EXITS.
+    cdntaxreceipts_sendCollectedPDF($receiptsForPrintingPDF, 'Receipts-To-Print-' . (int) $_SERVER['REQUEST_TIME'] . '.pdf');  // EXITS.
   }
 }
 
