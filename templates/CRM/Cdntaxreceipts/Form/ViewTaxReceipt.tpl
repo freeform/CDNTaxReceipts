@@ -35,8 +35,8 @@ cj(document).ready(
     <tr>
         <td class="label">{ts}Amount{/ts}</td>
         <td class="bold">{$receipt.receipt_amount|crmMoney}</td>
-        <td class="label">&nbsp;</td>
-        <td>&nbsp;</td>
+        <td class="label">{ts}Receipt Status{/ts}</td>
+        <td>{if $receipt.receipt_status eq 'issued'}{ts}Issued{/ts}{elseif $receipt.receipt_status eq 'cancelled'}{ts}Cancelled{/ts}{/if}</td>
     </tr>
     <tr>
         <td class="label">{ts}Contribution(s){/ts}</td>
@@ -70,7 +70,7 @@ cj(document).ready(
   <h3>{ts domain='org.civicrm.cdntaxreceipts'}Re-Issue Tax Receipt{/ts}</h3>
   {if call_user_func(array('CRM_Core_Permission','check'), 'issue cdn tax receipts')}
     <p>{ts domain='org.civicrm.cdntaxreceipts'}Click '{$buttonLabel}' to re-issue a tax receipt for this contribution. The
-    tax receipt will be marked 'duplicate' with the same receipt number and amount as
+    tax receipt will be marked {if $isCancelled}'Cancelled'{else}'Duplicate'{/if} with the same receipt number and amount as
     the original copy.{/ts}</p>
     {if $method eq 'email'}
       <p>{ts domain='org.civicrm.cdntaxreceipts'}The receipt will be sent automatically <strong>by email</strong> to the contributor
@@ -87,4 +87,33 @@ cj(document).ready(
 <div class="crm-submit-buttons">
     {include file="CRM/common/formButtons.tpl" location="bottom"}
 </div>
+    {literal}
+        <script type="text/javascript">
+            var cancelCDNTaxReceiptConfirmed = false;
+
+            // Pop-up confirmation when clicking "Cancel receipt"
+            function checkCancelReceipt(e) {
+                e = e || window.event;
+
+                if (!cancelCDNTaxReceiptConfirmed) {
+                    var $button = $('#_qf_ViewTaxReceipt_submit-bottom');
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    CRM.confirm({
+                        title: ts('Confirm cancellation', {}),
+                        message: ts('You are about to cancel this tax receipt. Continue?', {}),
+                        options: {
+                            no: ts('Go back', {}),
+                            yes: ts('Cancel receipt', {})
+                        }
+                    })
+                            .on('crmConfirm:yes', function() {
+                                cancelCDNTaxReceiptConfirmed = true;
+                                $button.click();
+                            });
+                }
+            }
+        </script>
+    {/literal}
+
 </div>

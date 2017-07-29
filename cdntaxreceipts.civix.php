@@ -95,6 +95,9 @@ function _cdntaxreceipts_civix_civicrm_upgrade($op, CRM_Queue_Queue $queue = NUL
   }
 }
 
+/**
+ * @return CRM_Cdntaxreceipts_Upgrader
+ */
 function _cdntaxreceipts_civix_upgrader() {
   if (!file_exists(__DIR__.'/CRM/Cdntaxreceipts/Upgrader.php')) {
     return NULL;
@@ -159,6 +162,35 @@ function _cdntaxreceipts_civix_civicrm_managed(&$entities) {
 }
 
 /**
+ * (Delegated) Implementation of hook_civicrm_caseTypes
+ *
+ * Find any and return any files matching "xml/case/*.xml"
+ *
+ * Note: This hook only runs in CiviCRM 4.4+.
+ *
+ * @link http://wiki.civicrm.org/confluence/display/CRMDOC/hook_civicrm_caseTypes
+ */
+function _cdntaxreceipts_civix_civicrm_caseTypes(&$caseTypes) {
+  if (!is_dir(__DIR__ . '/xml/case')) {
+    return;
+  }
+
+  foreach (_cdntaxreceipts_civix_glob(__DIR__ . '/xml/case/*.xml') as $file) {
+    $name = preg_replace('/\.xml$/', '', basename($file));
+    if ($name != CRM_Case_XMLProcessor::mungeCaseType($name)) {
+      $errorMessage = sprintf("Case-type file name is malformed (%s vs %s)", $name, CRM_Case_XMLProcessor::mungeCaseType($name));
+      CRM_Core_Error::fatal($errorMessage);
+      // throw new CRM_Core_Exception($errorMessage);
+    }
+    $caseTypes[$name] = array(
+      'module' => 'org.civicrm.cdntaxreceipts',
+      'name' => $name,
+      'file' => $file,
+    );
+  }
+}
+
+/**
  * Glob wrapper which is guaranteed to return an array.
  *
  * The documentation for glob() says, "On some systems it is impossible to
@@ -211,5 +243,21 @@ function _cdntaxreceipts_civix_insert_navigation_menu(&$menu, $path, $item, $par
       }
     }
     return $found;
+  }
+}
+
+/**
+ * (Delegated) Implementation of hook_civicrm_alterSettingsFolders
+ *
+ * @link http://wiki.civicrm.org/confluence/display/CRMDOC/hook_civicrm_alterSettingsFolders
+ */
+function _cdntaxreceipts_civix_civicrm_alterSettingsFolders(&$metaDataFolders = NULL) {
+  static $configured = FALSE;
+  if ($configured) return;
+  $configured = TRUE;
+
+  $settingsDir = __DIR__ . DIRECTORY_SEPARATOR . 'settings';
+  if(is_dir($settingsDir) && !in_array($settingsDir, $metaDataFolders)) {
+    $metaDataFolders[] = $settingsDir;
   }
 }
